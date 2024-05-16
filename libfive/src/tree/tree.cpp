@@ -22,6 +22,8 @@ You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "libfive/eval/eval_array.hpp"
 #include "libfive/oracle/oracle_clause.hpp"
 
+#include <tracy/Tracy.hpp>
+
 namespace libfive {
 
 Tree::~Tree() {
@@ -278,6 +280,8 @@ bool Tree::eq(const Tree& other) const {
 std::ostream& Tree::print_prefix(std::ostream& s) const {
     std::stack<std::variant<const Data*, char>> todo;
     todo.push(ptr);
+
+
 
     std::stack<Opcode::Opcode> ops;
     ops.push(Opcode::INVALID); // Remove need to check ops.size()
@@ -662,6 +666,7 @@ Tree Tree::optimized_helper(
 
     // Deduplicator function, which returns a raw pointer
     auto uniq = [&canonical](const Tree t) {
+        ZoneScopedN("uniq");
         const auto key = t->key();
         const auto k_itr = canonical.find(key);
         // We already have a canonical version of this tree,
@@ -675,9 +680,15 @@ Tree Tree::optimized_helper(
     };
 
     while (todo.size()) {
+        ZoneScopedN("while loop");
+
         const auto t = todo.top();
-        todo.pop();
+        {
+            ZoneScopedN("pop");
+            todo.pop();
+        }
         if (auto d = std::get_if<Down>(&t)) {
+            ZoneScopedN("Down");
             using namespace Opcode;
 
             // Normally, we're descending throught the tree without an affine
@@ -689,6 +700,7 @@ Tree Tree::optimized_helper(
 
             bool could_be_affine = false;
             auto mark_affine = [&]() {
+                ZoneScopedN("mark_affine");
                 todo.pop();
                 affine.pop();
                 const bool has_map = affine.top().has_value();
@@ -702,6 +714,7 @@ Tree Tree::optimized_helper(
             };
             bool could_be_commutative = false;
             auto mark_commutative = [&](libfive::Opcode::Opcode op) {
+                ZoneScopedN("mark_commutative");
                 todo.pop();
                 commutative.pop();
                 // If we've got a commutative list available, then the most
@@ -769,6 +782,7 @@ Tree Tree::optimized_helper(
                 }
             }
         } else if (auto d = std::get_if<Up>(&t)) {
+            ZoneScopedN("Up");
             // Pop the std::nullopt added in Down
             affine.pop();
             commutative.pop();
@@ -812,6 +826,7 @@ Tree Tree::optimized_helper(
                 out.push(new_self);
             }
         } else if (std::get_if<UpAffine>(&t)) {
+            ZoneScopedN("UpAffine");
             assert(affine.top().has_value());
             auto map = std::move(*affine.top());
             affine.pop();
@@ -850,10 +865,14 @@ Tree Tree::optimized_helper(
                     return a.first < b.first;
                 }
             };
-            std::sort(pos_.begin(), pos_.end(), sort_fn);
-            std::sort(neg_.begin(), neg_.end(), sort_fn);
+            {
+                ZoneScopedN("sort pos/neg");
+                std::sort(pos_.begin(), pos_.end(), sort_fn);
+                std::sort(neg_.begin(), neg_.end(), sort_fn);
+            }
 
             auto collapse = [&uniq](const auto& v) {
+                ZoneScopedN("collapse");
                 auto itr = v.begin();
                 Tree out = Tree::invalid();
                 while (itr != v.end()) {
@@ -914,6 +933,7 @@ Tree Tree::optimized_helper(
                 out.push(new_self);
             }
         } else if (auto d = std::get_if<UpCommutative>(&t)) {
+            ZoneScopedN("UpCommutative");
             assert(commutative.top().has_value());
             auto comm = std::move(*commutative.top());
             assert(comm.list.size() >= 2);
@@ -923,7 +943,10 @@ Tree Tree::optimized_helper(
             // Sort so that commutative operations with the same list of
             // children will be deduplicated, since the arguments are
             // already deduplicated by now.
-            std::sort(comm.list.begin(), comm.list.end());
+            {
+                ZoneScopedN("sort comm");
+                std::sort(comm.list.begin(), comm.list.end());
+            }
 
             // If this is a min or max operation, then cancel out duplicates
             // (since min(f, f) = f)
@@ -955,6 +978,7 @@ Tree Tree::optimized_helper(
                 out.push(new_self);
             }
         }
+        FrameMark;
     }
     assert(out.size() == 1);
     return out.top().with_flags(TREE_FLAG_IS_OPTIMIZED);
