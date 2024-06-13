@@ -24,6 +24,7 @@ You can obtain one at http://mozilla.org/MPL/2.0/.
 #include "libfive/render/brep/dc/intersection.hpp"
 #include "libfive/render/brep/dc/marching.hpp"
 #include "libfive/render/brep/default_new_delete.hpp"
+#include "libfive/render/brep/dc/quadric.hpp"
 
 namespace libfive {
 
@@ -56,13 +57,6 @@ struct DCLeaf
      * (because they could be in more than one DCLeaf) */
     std::array<Intersection<N>*, _edges(N) * 2> intersections;
 
-    /*  Feature rank for the cell's vertex, where                    *
-     *      1 is face, 2 is edge, 3 is corner                        *
-     *                                                               *
-     *  This value is populated in evalLeaf and used when merging    *
-     *  from lower-ranked children                                   */
-    unsigned rank;
-
     /* Used as a unique per-vertex index when unpacking into a b-rep;   *
      * this is cheaper than storing a map of DCTree* -> uint32_t         */
     mutable std::array<uint32_t, ipow(2, N - 1)> index;
@@ -77,14 +71,8 @@ struct DCLeaf
     /*  Marks whether this cell is manifold or not  */
     bool manifold;
 
-    /*  Mass point is the average intersection location *
-     *  (the last coordinate is number of points summed) */
-    Eigen::Matrix<double, N + 1, 1> mass_point;
-
     /*  QEF matrices */
-    Eigen::Matrix<double, N, N> AtA;
-    Eigen::Matrix<double, N, 1> AtB;
-    double BtB;
+    Quadric<double, N> quadric;
 
     ALIGNED_OPERATOR_NEW_AND_DELETE(DCLeaf)
 };
@@ -158,21 +146,10 @@ public:
      *  This must only be called on non-branching cells.
      *
      *  level is defined as 0 for EMPTY or FILLED terminal cells;
-     *  for ambiguous leaf cells, it is the depth of the largest 
+     *  for ambiguous leaf cells, it is the depth of the largest
      *  chain of leafs that were merged into this cell.
      */
     unsigned level() const;
-
-    /*
-     *  Looks up this cell's feature rank.
-     *
-     *  This must only be called on non-branching cells.
-     *
-     *  rank is defined as 0 for EMPTY and FILLED cells;
-     *  otherwise, it is 1 for a plane, 2 for an edge,
-     *  3 for a vertex (in the 3D case).
-     */
-    unsigned rank() const;
 
     /*
      *  Sanity-check a DCTree by ensuring that all corners are consistent
@@ -229,7 +206,7 @@ protected:
      *  Searches for a vertex within the DCTree cell, using the QEF matrices
      *  that are pre-populated in AtA, AtB, etc.
      *
-     *  Minimizes the QEF towards mass_point
+     *  Minimizes the QEF
      *
      *  Stores the vertex in vert and returns the QEF error
      */

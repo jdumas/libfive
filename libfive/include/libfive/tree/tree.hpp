@@ -201,6 +201,8 @@ public:
     const Data* release();
     static Tree reclaim(const Data* ptr);
 
+    Tree as_optimized() const { return this->with_flags(TREE_FLAG_IS_OPTIMIZED); }
+
 protected:
     /*  This is the managed pointer.  It's mutable so that the destructor
      *  can swap it out for nullptr when flattening out destruction of a

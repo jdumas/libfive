@@ -72,7 +72,6 @@ template <unsigned N>
 void DCLeaf<N>::reset()
 {
     level = 0;
-    rank = 0;
     corner_mask = 0;
     vertex_count = 0;
     manifold = false;
@@ -84,10 +83,7 @@ void DCLeaf<N>::reset()
     }
 
     verts.setZero();
-    mass_point.setZero();
-    AtA.setZero();
-    AtB.setZero();
-    BtB = 0;
+    quadric.reset();
 }
 
 template <unsigned N>
@@ -474,33 +470,6 @@ void DCTree<N>::evalLeaf(Evaluator* eval,
         // populated with an Intersection object, whether taken from a neighbor
         // or calculated in the code above.
 
-        // Reset the mass point, since we may have used it for the previous
-        // vertex.
-        this->leaf->mass_point = this->leaf->mass_point.Zero();
-
-        {   // Build the mass point from max-rank intersections
-            int max_rank = 0;
-            for (unsigned i=0; i < edge_count; ++i) {
-                if (this->leaf->intersections[edges[i]]) {
-                    auto r = this->leaf->intersections[edges[i]]->get_rank();
-                    if (r > max_rank) {
-                        max_rank = r;
-                    }
-                }
-            }
-
-            for (unsigned i=0; i < edge_count; ++i)
-            {
-                if (this->leaf->intersections[edges[i]] &&
-                    this->leaf->intersections[edges[i]]->get_rank() == max_rank)
-                {
-                    this->leaf->mass_point +=
-                        this->leaf->intersections[edges[i]]
-                                  ->normalized_mass_point();
-                }
-            }
-        }
-
         // Now, we'll (pretend to) unpack into A and b matrices,
         // then immediately calculate AtA, AtB, and BtB
         //
@@ -527,16 +496,13 @@ void DCTree<N>::evalLeaf(Evaluator* eval,
         //
         // Instead of actually populating these matrices, we'll immediately
         // construct the compact results AtA, AtB, BtB
-        this->leaf->AtA.array() = 0;
-        this->leaf->AtB.array() = 0;
-        this->leaf->BtB = 0;
+        this->leaf->quadric.reset();
+
         for (unsigned i=0; i < edge_count; ++i)
         {
             if (this->leaf->intersections[edges[i]])
             {
-                this->leaf->AtA += this->leaf->intersections[edges[i]]->AtA;
-                this->leaf->AtB += this->leaf->intersections[edges[i]]->AtB;
-                this->leaf->BtB += this->leaf->intersections[edges[i]]->BtB;
+                this->leaf->quadric += this->leaf->intersections[edges[i]]->quadric;
             }
         }
 
@@ -661,11 +627,6 @@ bool DCTree<N>::collectChildren(Evaluator* eval,
     this->leaf->manifold = true;
     this->leaf->corner_mask = corner_mask;
 
-    // Populate the feature rank as the maximum of all children
-    // feature ranks (as seen in DC: The Secret Sauce)
-    this->leaf->rank = std::accumulate(cs.begin(), cs.end(), (unsigned)0,
-            [](unsigned a, DCTree<N>* b){ return std::max(a, b->rank());} );
-
     // Accumulate the mass point, QEF matrices, and appropriate intersections.
     for (unsigned i=0; i < cs.size(); ++i)
     {
@@ -675,13 +636,11 @@ bool DCTree<N>::collectChildren(Evaluator* eval,
         if (c->type == Interval::AMBIGUOUS)
         {
             assert(c->leaf != nullptr);
-            if (c->leaf->rank == this->leaf->rank)
-            {
-                this->leaf->mass_point += c->leaf->mass_point;
-            }
-            this->leaf->AtA += c->leaf->AtA;
-            this->leaf->AtB += c->leaf->AtB;
-            this->leaf->BtB += c->leaf->BtB;
+            // if (c->leaf->rank == this->leaf->rank)
+            // {
+            //     this->leaf->mass_point += c->leaf->mass_point;
+            // }
+            this->leaf->quadric += c->leaf->quadric;
 
             for (auto& edge : edgesFromChild(i))
             {
@@ -740,76 +699,15 @@ template <unsigned N>
 double DCTree<N>::findVertex(unsigned index)
 {
     assert(this->leaf != nullptr);
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, N, N>> es(
-            this->leaf->AtA);
-    assert(this->leaf->mass_point(N) > 0);
 
-    // We need to find the pseudo-inverse of AtA.
-    auto eigenvalues = es.eigenvalues().real();
-
-    // Truncate near-singular eigenvalues in the SVD's diagonal matrix
-    Eigen::Matrix<double, N, N> D = Eigen::Matrix<double, N, N>::Zero();
-
-    // Pick a cutoff depending on whether the derivatives were normalized
-    // before loading them into the AtA matrix
-#if LIBFIVE_UNNORMALIZED_DERIVS
-    auto highest_val = eigenvalues.template lpNorm<Eigen::Infinity>();
-    // We scale EIGENVALUE_CUTOFF to highestVal.  Additionally, we need to 
-    // use a significantly lower cutoff threshold (here set to the square 
-    // of the normalized-derivatives threshold), since when derivatives 
-    // are not normalized a cutoff of .1 can cause one feature to be 
-    // entirely ignored if its derivative is fairly small in comparison to
-    // another feature.  (The same can happen with any cutoff, but it is
-    // much less likely this way, and it should still be high enough to
-    // avoid wild vertices due to noisy normals under most circumstances, 
-    // at least enough that they will be a small minority of the situations
-    // in which dual contouring's need to allow out-of-box vertices causes
-    // issues.)
-
-    // If highestVal is extremely small, it's almost certainly due to noise or
-    // is 0; in the former case, scaling our cutoff to it will still result in 
-    // a garbage result, and in the latter it'll produce a diagonal matrix full
-    // of infinities.  So we instead use an infinite cutoff to force D to be
-    // set to zero, resulting in the mass point being used as our vertex, which
-    // is the best we can do without good gradients.
-    constexpr double EIGENVALUE_CUTOFF_2 = EIGENVALUE_CUTOFF * EIGENVALUE_CUTOFF;
-    const double cutoff = (highest_val > 1e-20)
-        ? highest_val * EIGENVALUE_CUTOFF_2
-        : std::numeric_limits<double>::infinity();
-#else
-    const double cutoff = EIGENVALUE_CUTOFF;
-#endif
-
-    for (unsigned i = 0; i < N; ++i) {
-        D.diagonal()[i] = (fabs(eigenvalues[i]) < cutoff)
-            ? 0 : (1 / eigenvalues[i]);
-    }
-
-    // Get rank from eigenvalues
-    if (!this->isBranch())
-    {
-        assert(index > 0 || this->leaf->rank == 0);
-        this->leaf->rank = D.diagonal().count();
-    }
-
-    // SVD matrices
-    auto U = es.eigenvectors().real().eval(); // = V
-
-    // Pseudo-inverse of A
-    auto AtAp = (U * D * U.transpose()).eval();
-
-    // Solve for vertex position (minimizing distance to center)
-    Vec center = this->leaf->mass_point.template head<N>() /
-                 this->leaf->mass_point(N);
-    Vec v = AtAp * (this->leaf->AtB - (this->leaf->AtA * center)) + center;
+    // Solve for vertex position
+    Vec v = this->leaf->quadric.minimizer();
 
     // Store this specific vertex in the verts matrix
     this->leaf->verts.col(index) = v;
 
     // Return the QEF error
-    return (v.transpose() * this->leaf->AtA * v -
-            2*v.transpose() * this->leaf->AtB)[0]
-            + this->leaf->BtB;
+    return this->leaf->quadric.eval(v);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -913,25 +811,6 @@ unsigned DCTree<N>::level() const
     return 0;
 }
 
-template <unsigned N>
-unsigned DCTree<N>::rank() const
-{
-    assert(!this->isBranch());
-    switch (this->type)
-    {
-        case Interval::AMBIGUOUS:
-            assert(this->leaf != nullptr);
-            return this->leaf->rank;
-
-        case Interval::UNKNOWN: assert(false);
-
-        case Interval::FILLED:  // fallthrough
-        case Interval::EMPTY:   assert(this->leaf == nullptr);
-                                return 0;
-    };
-    return 0;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
 template <unsigned N>
@@ -989,7 +868,6 @@ bool DCTree<N>::checkConsistency(const DCNeighbors<N>& neighbors) const
                     << "    type: " << this->type << "\n"
                     << "    branch: "
                         << (this->isBranch() ? "yes" : "no") << "\n"
-                    << "    rank: " << this->rank() << "\n"
                     << "    corner " << i << " at ["
                         << this->region.corner(i).transpose()
                         << "]: " << cornerState(i) << "\n"
@@ -999,7 +877,6 @@ bool DCTree<N>::checkConsistency(const DCNeighbors<N>& neighbors) const
                     << "    type: " << r.first->type << "\n"
                     << "    branch: "
                         << (r.first->isBranch() ? "yes" : "no") << "\n"
-                    << "    rank: " << r.first->rank() << "\n"
                     << "    corner " << r.second << " at ["
                         << r.first->region.corner(r.second).transpose() << "]: "
                         << r.first->cornerState(r.second) << "\n";
