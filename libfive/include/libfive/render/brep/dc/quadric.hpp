@@ -5,9 +5,22 @@
 
 #include <Eigen/Dense>
 
+#include <functional>
+#include <array>
 #include <iostream>
 
 namespace libfive {
+
+struct Tracker {
+
+    static Tracker & instance() {
+        static Tracker instance;
+        return instance;
+    }
+
+    std::function<void(std::array<double, 9>, std::array<double, 3>)> add_quadric;
+
+};
 
 template <typename Scalar, int N>
 bool stable_normalize(Eigen::Matrix<Scalar, N, 1>& x, double &norm) {
@@ -65,8 +78,8 @@ struct Quadric<Scalar, 3>
         Quadric ret;
 
         // double sigma_n = 1e-2 + 1e3 * std::abs(value);
-        // std::cout << sigma_n << std::endl;
-        double sigma_n = 1e-2;
+        // std::cout << pos.transpose() << std::endl;
+        double sigma_n = 1e-1;
 
         // ret.q = QuadricT::point_quadric(pos);
         ret.q = QuadricT::probabilistic_plane_quadric(
@@ -96,6 +109,16 @@ struct Quadric<Scalar, 3>
     }
 
     QuadricT q;
+
+    std::array<double, 9> coeffs() const {
+        std::array<double, 9> x;
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                x[i * 3 + j] = q.A()(i, j);
+            }
+        }
+        return x;
+    }
 };
 
 template <typename Scalar, unsigned N>
@@ -145,6 +168,10 @@ struct Quadric
         b += rhs.b;
         c += rhs.c;
         return *this;
+    }
+
+    std::array<double, 9> coeffs() const {
+        return {};
     }
 
     Eigen::Matrix<Scalar, N, N> A = Eigen::Matrix<Scalar, N, N>::Zero();

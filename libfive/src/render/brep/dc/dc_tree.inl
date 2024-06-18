@@ -143,12 +143,14 @@ void DCTree<N>::evalLeaf(Evaluator* eval,
 
     // Pack corners into evaluator
     Eigen::Matrix<float, 3, 1 << N> pos;
+    Eigen::AlignedBox<float, 3> bbox;
     for (uint8_t i=0; i < this->children.size(); ++i)
     {
         auto c = neighbors.check(i);
         if (c == Interval::UNKNOWN)
         {
             pos.col(count) = this->region.corner3f(i);
+            bbox.extend(pos.col(count));
             eval->set(pos.col(count), count);
             corner_indices[count++] = i;
         }
@@ -509,7 +511,16 @@ void DCTree<N>::evalLeaf(Evaluator* eval,
         // Find the vertex position, storing into the appropriate column
         // of the vertex array and ignoring the error result (because
         // this is the bottom of the recursion)
+        int ii = this->leaf->vertex_count;
         findVertex(this->leaf->vertex_count);
+        // if constexpr (N == 3) {
+        //     if (Tracker::instance().add_quadric) {
+        //         auto pt = this->leaf->verts.col(ii);
+        //         // auto pt = bbox.center();
+        //         std::array<double, 3> p = {pt.x(), pt.y(), pt.z()};
+        //         Tracker::instance().add_quadric(this->leaf->quadric.coeffs(), p);
+        //     }
+        // }
 
         // Move on to the next vertex
         this->leaf->vertex_count++;
@@ -528,6 +539,15 @@ void DCTree<N>::saveIntersection(const Vec& pos, const Vec& derivs,
         this->leaf->intersections[edge] = object_pool.next().next().get();
     }
     this->leaf->intersections[edge]->push(pos, derivs, value);
+    if constexpr (N == 3) {
+        if (Tracker::instance().add_quadric) {
+            // auto pt = this->leaf->verts.col(ii);
+            // auto pt = bbox.center();
+            auto pt = pos;
+            std::array<double, 3> p = {pt.x(), pt.y(), pt.z()};
+            Tracker::instance().add_quadric(this->leaf->quadric.coeffs(), p);
+        }
+    }
 }
 
 template <unsigned N>
@@ -614,7 +634,7 @@ bool DCTree<N>::collectChildren(Evaluator* eval,
         leafsAreManifold(cs, corners);
 
     // If we're not manifold, then we can't collapse
-    if (!manifold)
+    if (true || !manifold)
     {
         this->done();
         return true;
@@ -628,6 +648,7 @@ bool DCTree<N>::collectChildren(Evaluator* eval,
     this->leaf->corner_mask = corner_mask;
 
     // Accumulate the mass point, QEF matrices, and appropriate intersections.
+    std::cout << "merging children" << std::endl;
     for (unsigned i=0; i < cs.size(); ++i)
     {
         const auto& c = cs[i];
