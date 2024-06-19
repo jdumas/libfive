@@ -57,6 +57,8 @@ struct DCLeaf
      * (because they could be in more than one DCLeaf) */
     std::array<Intersection<N>*, _edges(N) * 2> intersections;
 
+    unsigned rank;
+
     /* Used as a unique per-vertex index when unpacking into a b-rep;   *
      * this is cheaper than storing a map of DCTree* -> uint32_t         */
     mutable std::array<uint32_t, ipow(2, N - 1)> index;
@@ -71,7 +73,12 @@ struct DCLeaf
     /*  Marks whether this cell is manifold or not  */
     bool manifold;
 
+    Eigen::Matrix<double, N + 1, 1> mass_point;
+
     /*  QEF matrices */
+    Eigen::Matrix<double, N, N> AtA;
+    Eigen::Matrix<double, N, 1> AtB;
+    double BtB;
     Quadric<double, N> quadric;
 
     ALIGNED_OPERATOR_NEW_AND_DELETE(DCLeaf)
@@ -150,6 +157,8 @@ public:
      *  chain of leafs that were merged into this cell.
      */
     unsigned level() const;
+
+    unsigned rank() const;
 
     /*
      *  Sanity-check a DCTree by ensuring that all corners are consistent

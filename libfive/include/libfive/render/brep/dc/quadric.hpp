@@ -18,7 +18,13 @@ struct Tracker {
         return instance;
     }
 
-    std::function<void(std::array<double, 9>, std::array<double, 3>)> add_quadric;
+    // std::function<void(std::array<double, 9>, std::array<double, 3>)> add_quadric;
+    std::function<void(std::array<double, 3>, std::array<double, 3>)> add_point_and_normal;
+
+    std::function<void(Eigen::AlignedBox<float, 3>)> add_cell;
+
+    double sigma_n = 1e-3;
+    bool use_probabilistic_quadrics = false;
 
 };
 
@@ -79,7 +85,9 @@ struct Quadric<Scalar, 3>
 
         // double sigma_n = 1e-2 + 1e3 * std::abs(value);
         // std::cout << pos.transpose() << std::endl;
-        double sigma_n = 1e-1;
+        double sigma_n = Tracker::instance().sigma_n;
+
+        pos -= value * deriv;
 
         // ret.q = QuadricT::point_quadric(pos);
         ret.q = QuadricT::probabilistic_plane_quadric(
@@ -87,12 +95,16 @@ struct Quadric<Scalar, 3>
                          deriv,
                          0,
                          sigma_n);
-        ret.q.c += value;
 
         return ret;
     }
 
-    auto minimizer() const { return q.minimizer(); }
+    Eigen::Matrix<Scalar, 3, 1> minimizer() const {
+        Eigen::LDLT<Eigen::Matrix3<Scalar>> ldlt;
+        ldlt.compute(q.A());
+        return ldlt.solve(q.b());
+        // return q.minimizer();
+    }
 
     Scalar eval(Eigen::Matrix<Scalar, 3, 1> x) const {
         return q(x);
@@ -149,7 +161,12 @@ struct Quadric
         return ret;
     }
 
-    auto minimizer() const { return ldlt.solve(b); }
+    Eigen::Matrix<Scalar, N, 1> minimizer() const {
+        // llt may be be faster but less numerically robust
+        Eigen::LDLT<Eigen::Matrix<Scalar, N, N>> ldlt;
+        ldlt.compute(A);
+        return ldlt.solve(b);
+    }
 
     Scalar eval(Eigen::Matrix<Scalar, N, 1> x) const {
         assert(x.cols() == 1);
@@ -170,16 +187,9 @@ struct Quadric
         return *this;
     }
 
-    std::array<double, 9> coeffs() const {
-        return {};
-    }
-
     Eigen::Matrix<Scalar, N, N> A = Eigen::Matrix<Scalar, N, N>::Zero();
     Eigen::Matrix<Scalar, N, 1> b = Eigen::Matrix<Scalar, N, 1>::Zero();
     Scalar c = Scalar(0);
-
-    // llt may be be faster but less numerically robust
-    Eigen::LDLT<Eigen::Matrix<Scalar, N, N>> ldlt;
 };
 
 }
