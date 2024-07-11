@@ -553,15 +553,29 @@ void DCTree<N>::evalLeaf(Evaluator* eval,
         // of the vertex array and ignoring the error result (because
         // this is the bottom of the recursion)
         int ii = this->leaf->vertex_count;
-        findVertex(this->leaf->vertex_count);
-        // if constexpr (N == 3) {
-        //     if (Tracker::instance().add_quadric) {
-        //         auto pt = this->leaf->verts.col(ii);
-        //         // auto pt = bbox.center();
-        //         std::array<double, 3> p = {pt.x(), pt.y(), pt.z()};
-        //         Tracker::instance().add_quadric(this->leaf->quadric.coeffs(), p);
-        //     }
-        // }
+        Eigen::Matrix<double, N, 1> c = cell.center().head<N>().template cast<double>();
+        findVertex(this->leaf->vertex_count, c);
+        if constexpr (N == 3) {
+            if (Tracker::instance().add_quadric) {
+                Vec ct = this->leaf->mass_point.template head<N>() /
+                 this->leaf->mass_point(N);
+                auto pt = this->leaf->verts.col(ii);
+                std::array<double, 3> c = {ct.x(), ct.y(), ct.z()};
+                std::array<double, 3> p = {pt.x(), pt.y(), pt.z()};
+                if (Tracker::instance().use_probabilistic_quadrics) {
+                    Tracker::instance().add_quadric(this->leaf->quadric.coeffs(), c, p);
+                } else {
+                    auto q = this->leaf->AtA;
+                    std::array<double, 9> coeffs;
+                    for (int i = 0; i < 3; ++i) {
+                        for (int j = 0; j < 3; ++j) {
+                            coeffs[i * 3 + j] = q(i, j);
+                        }
+                    }
+                    Tracker::instance().add_quadric(coeffs, c, p);
+                }
+            }
+        }
 
         // Move on to the next vertex
         this->leaf->vertex_count++;
@@ -776,19 +790,36 @@ bool DCTree<N>::collectChildren(Evaluator* eval,
 ////////////////////////////////////////////////////////////////////////////////
 
 template <unsigned N>
-double DCTree<N>::findVertex(unsigned index)
+double DCTree<N>::findVertex(unsigned index, Eigen::Matrix<double, N, 1> c)
 {
     assert(this->leaf != nullptr);
 
     if (Tracker::instance().use_probabilistic_quadrics) {
+        Vec center = this->leaf->mass_point.template head<N>() /
+                 this->leaf->mass_point(N);
+
         // Solve for vertex position
-        Vec v = this->leaf->quadric.minimizer();
+        Vec v;
+        double val;
+        if constexpr (N == 3) {
+            // std::cout << "q.A:\n" << this->leaf->quadric.q.b() << " \nAtA:\n" << this->leaf->AtB << std::endl  << std::endl;
+
+            double sigma_n = Tracker::instance().sigma_n;
+            using QuadricT = typename Quadric<double, N>::QuadricT;
+            Quadric<double, N> q = this->leaf->quadric;
+            // q.q += sigma_n * QuadricT::point_quadric(center);
+            v = q.minimizer(center);
+            val = q.eval(v);
+        } else {
+            v = this->leaf->quadric.minimizer(center);
+            val = this->leaf->quadric.eval(v);
+        }
 
         // Store this specific vertex in the verts matrix
         this->leaf->verts.col(index) = v;
 
         // Return the QEF error
-        return this->leaf->quadric.eval(v);
+        return val;
     }
 
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, N, N>> es(

@@ -219,7 +219,7 @@ protected:
      *
      *  Stores the vertex in vert and returns the QEF error
      */
-    double findVertex(unsigned i=0);
+    double findVertex(unsigned i=0, Eigen::Matrix<double, N, 1> c = Eigen::Matrix<double, N, 1>::Zero());
 
     /*
      *  Writes the given intersection into the intersections list

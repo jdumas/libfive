@@ -435,17 +435,22 @@ public:
         return quadric::from_coefficients(math::self_outer_product(n), n * d, d * d);
     }
 
-    [[nodiscard]] static quadric probabilistic_plane_quadric(pos3 const& mean_p, vec3 const& mean_n, scalar_t stddev_p, scalar_t stddev_n)
+    [[nodiscard]] static quadric probabilistic_plane_quadric(pos3 const& mean_p, vec3 const& mean_n, scalar_t stddev_p, scalar_t stddev_n, scalar_t value)
     {
         auto const p = math::to_vec(mean_p);
         auto const sn2 = stddev_n * stddev_n;
         auto const sp2 = stddev_p * stddev_p;
-        auto const d = math::dot(mean_p, mean_n);
+        auto const d = math::dot(mean_p, mean_n) - value;
 
         auto A = math::self_outer_product(mean_n);
         math::get(A, 0, 0) += sn2;
         math::get(A, 1, 1) += sn2;
         math::get(A, 2, 2) += sn2;
+
+        // AtA += mean_n * mean_n.transpose();
+        // const double d = mean_n.dot(mean_p) - value;
+        // AtB += mean_n * d;
+        // BtB += d * d;
 
         auto const b = mean_n * d + p * sn2;
         auto const c = d * d + sn2 * math::dot(p, p) + sp2 * math::dot(mean_n, mean_n) + 3 * sp2 * sn2;
